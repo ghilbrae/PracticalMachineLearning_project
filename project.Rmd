@@ -1,0 +1,216 @@
+---
+title: "Predicting how barbell lifts are performed"
+author: "A. Rivera"
+date: "9/27/2015"
+output: html_document
+---
+
+## Introduction
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible 
+to collect a large amount of data about personal activity relatively inexpensively. 
+These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.
+
+In this project data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants will be used to predict the manner in which they did the exercise they did. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+The result will correspond to the variable *classe* in the training data set
+and will have the following values:
+
+* Class A: exactly according to the specification
+* Class B: throwing the elbows to the front
+* Class C: lifting the dumbbell only halfway
+* Class D: lowering the dumbbell only halfway
+* Class E: throwing the hips to the front
+
+Read more: http://groupware.les.inf.puc-rio.br/har#weight_lifting_exercises#ixzz3mxEMRhFr
+
+## Data
+
+The training data for this project are available here: 
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here: 
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har.
+
+```{r, echo=FALSE, results='hide'}
+library(caret)
+library(rpart)
+library(randomForest)
+```
+
+## Getting and cleaning the data
+
+We will be using two sets, a training set and a testing set that have been already prepared:
+
+```{r, cache=TRUE}
+training <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",
+                        na.strings = c("NA","#DIV/0!",""))
+testing <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",
+                    na.strings = c("NA","#DIV/0!",""))
+```
+
+On a first exploration of the data we can see that a lot of the variables contain
+many NA's (output not shown for brevity). 
+
+```{r, results="hide"}
+summary(training)
+```
+
+So we will first try to eliminate those entries that due to its NA values cannot
+be used for our predictor. Studying the number of rows and the amount of NA values
+in each one we can see that there are a lot of columns in which almost all values
+are NA's.
+
+```{r, results="hide"}
+ncol(training)
+nrow(training)
+colSums(is.na(training))
+```
+
+There are also some variables that have no impact on the predicted class, such as
+the name of the participant or the time stamp. We will also eliminate these columns.
+
+```{r, results="hide"}
+names(training)
+```
+
+The last step in the cleaning process will take care of variables with near zero
+variance. These variables do not contribute to the model and can be safely ignored.
+
+*Cleaning the training set*
+```{r, cache=TRUE, results="hide"}
+# Filter by NA
+training <- training[, colSums(is.na(training)) == 0]
+# Filter by unused variables
+training_set <- training[ ,!(names(training) %in% c("X", "user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp", "new_window", "num_window"))]
+# Removing zero covariates
+nzv_train <- nearZeroVar(training_set, saveMetrics = TRUE)
+nzv_train
+training_set <- training_set[, nzv_train$nzv==FALSE]
+
+str(training_set)
+```
+
+To have a better idea of how the data looks like we will make a density plot to 
+study the distribution of the data according to the *classe*:
+
+```{r}
+qplot(classe, colour = classe, data = training_set, geom = 'density')
+```
+
+## Building the model
+
+The idea is to use the data related to the accelerometers on the belt, forearm,
+arm, and dumbell. But we can also use any of the other variables to enhance our 
+model. We will first create a model based only on those variables and based on the
+accuracy and results, we will study the necessity of adding more variables to it.
+
+```{r, results='hide'}
+classe <- training_set$classe
+training_acc <- training_set[, colnames(training_set)[grep("*accel*", colnames(training_set))]]
+training_acc$classe <- classe
+```
+
+Now we will partition these data on a training and testing set to train our model, 
+perform the cross-validation and determine the sample error:
+
+```{r}
+set.seed(2183)
+inTrain = createDataPartition(training_acc$classe, p = 0.75, list=FALSE)
+trainacc_train <- training_acc[inTrain, ]
+trainacc_test <- training_acc[-inTrain, ]
+```
+
+The method chosen for our model will be the Random Forest. This method builds a 
+classification bootstrapping samples (for the creation of each tree) and variables
+(in each split of the tree). It builds multiple trees and in the end a result will
+be that which gets more votes from all the trees created.
+
+This approach is known to have better accuracy at the risk of slow performance and
+overfitting.
+
+The out of sample error is estimated during the model building.
+
+```{r cache=TRUE}
+modFit <- train(classe ~ ., method="rf", data=trainacc_train,                 trControl=trainControl(method='cv'), allowParallel=TRUE )
+```
+
+Note that in this model we specify that the **trainControl (trControl)**, that 
+allows us to control how the model is trained, is *cross-validation*
+
+```{r}
+modFit
+modFit$finalModel
+```
+
+According to this results the model using only the accelerometer data has an **out of sample error of 5.2%**. This seems a bit too high.
+
+```{r}
+confusionMatrix(trainacc_train$classe, modFit$finalModel$predicted)
+```
+
+As we can see the **accuracy** is: **94.8%**
+
+Now we try using all the variables we had, not only the accelerometer related
+ones.
+
+```{r}
+inTrainAll = createDataPartition(training_set$classe, p = 0.75, list=FALSE)
+train_train <- training_set[inTrainAll,]
+train_test <- training_set[-inTrainAll,]
+```
+
+```{r cache=TRUE}
+modFitAll <- train(classe ~ ., method="rf", data=train_train,                 trControl=trainControl(method='cv'), allowParallel=TRUE )
+```
+
+```{r}
+modFitAll
+modFitAll$finalModel
+```
+
+According to this results the model using only the accelerometer data has an **out of sample error of 0.67**. This is a much better result than the one we obtained only
+using the accelerometer related variables.
+
+```{r}
+confusionMatrix(train_train$classe, modFitAll$finalModel$predicted)
+```
+
+As we can see the **accuracy** is much better too: **99.33%**
+
+Using this last model we apply the model to the set of testing data we created from
+our clean data set.
+
+```{r}
+prediction <- predict(modFitAll, train_test)
+confusionMatrix(prediction, train_test$classe)
+
+```
+
+Now we can calculate the out of sample error estimate and check if it is the same we
+obtained above:
+
+```{r}
+confmatrix <- confusionMatrix(prediction, train_test$classe)$table
+prediction2 <- sum(confmatrix[1,1], confmatrix[2,2], confmatrix[3,3], confmatrix[4,4], confmatrix[5,5])
+all <- sum(rowSums(confmatrix))
+diff_pred <- all - prediction2
+oosErrorRate <- (diff_pred / all) * 100
+oosErrorRate
+```
+
+We get a value of 0.57. This value is quite similar to the one we previously got from the model (0.67).
+
+**Applying the model to the test set**
+
+We can apply this model to the test set we loaded at the beginning of this report:
+
+```{r}
+predict(modFitAll, testing)
+```
+
+
